@@ -1,5 +1,9 @@
 # rs-ali-sts
 
+[![Crates.io](https://img.shields.io/crates/v/rs-ali-sts.svg)](https://crates.io/crates/rs-ali-sts)
+[![Documentation](https://docs.rs/rs-ali-sts/badge.svg)](https://docs.rs/rs-ali-sts)
+[![License: MIT](https://img.shields.io/crates/l/rs-ali-sts.svg)](http://opensource.org/licenses/MIT)
+
 [中文文档](README_CN.md)
 
 Alibaba Cloud STS (Security Token Service) SDK for Rust.

@@ -1,5 +1,9 @@
 # rs-ali-sts
 
+[![Crates.io](https://img.shields.io/crates/v/rs-ali-sts.svg)](https://crates.io/crates/rs-ali-sts)
+[![Documentation](https://docs.rs/rs-ali-sts/badge.svg)](https://docs.rs/rs-ali-sts)
+[![License: MIT](https://img.shields.io/crates/l/rs-ali-sts.svg)](http://opensource.org/licenses/MIT)
+
 [English](README.md)
 
 阿里云 STS (Security Token Service) Rust SDK。
