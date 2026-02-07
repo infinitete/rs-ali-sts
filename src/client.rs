@@ -210,11 +210,3 @@ impl Client {
         }
     }
 }
-
-#[cfg(test)]
-impl Client {
-    pub(crate) fn with_endpoint(credential: Credential, endpoint: String) -> Self {
-        let config = ClientConfig::default().with_endpoint(endpoint);
-        Self::with_config(credential, config)
-    }
-}
