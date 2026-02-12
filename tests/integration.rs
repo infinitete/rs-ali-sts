@@ -5,15 +5,12 @@ use rs_ali_sts::{
 };
 
 fn test_credential() -> Credential {
-    Credential {
-        access_key_id: "test-access-key-id".into(),
-        access_key_secret: "test-access-key-secret".into(),
-    }
+    Credential::new("test-access-key-id", "test-access-key-secret")
 }
 
-fn test_client(server_url: String) -> Client {
-    let config = ClientConfig::default().with_endpoint(server_url);
-    Client::with_config(test_credential(), config)
+fn test_client(endpoint: String) -> Client {
+    let config = ClientConfig::default().with_endpoint(endpoint);
+    Client::with_config(test_credential(), config).expect("failed to build client")
 }
 
 #[tokio::test]
@@ -48,7 +45,7 @@ async fn assume_role_success() {
 
     let resp = client
         .assume_role(AssumeRoleRequest {
-            role_arn: "acs:ram::123456:role/test-role".into(),
+            role_arn: "acs:ram::123456789012:role/test-role".into(),
             role_session_name: "session-name".into(),
             policy: None,
             duration_seconds: Some(3600),
@@ -75,27 +72,10 @@ async fn assume_role_success() {
 }
 
 #[tokio::test]
-async fn assume_role_api_error() {
-    let mut server = Server::new_async().await;
+async fn assume_role_validation_error() {
+    let _server = Server::new_async().await;
 
-    let mock = server
-        .mock("POST", "/")
-        .match_header("Content-Type", "application/x-www-form-urlencoded")
-        .match_body(Matcher::UrlEncoded("Action".into(), "AssumeRole".into()))
-        .with_status(400)
-        .with_header("Content-Type", "application/json")
-        .with_body(
-            r#"{
-                "RequestId": "err-req-001",
-                "Code": "InvalidParameter.RoleArn",
-                "Message": "The specified RoleArn is invalid.",
-                "Recommend": "https://error-center.aliyun.com/"
-            }"#,
-        )
-        .create_async()
-        .await;
-
-    let client = test_client(server.url());
+    let client = test_client(_server.url());
 
     let result = client
         .assume_role(AssumeRoleRequest {
@@ -107,27 +87,18 @@ async fn assume_role_api_error() {
         })
         .await;
 
+    // The validation should catch the invalid RoleARN format before making the API call
     assert!(result.is_err());
 
     match result.unwrap_err() {
-        StsError::Api {
-            request_id,
-            code,
-            message,
-            recommend,
-        } => {
-            assert_eq!(request_id, "err-req-001");
-            assert_eq!(code, "InvalidParameter.RoleArn");
-            assert_eq!(message, "The specified RoleArn is invalid.");
-            assert_eq!(
-                recommend.as_deref(),
-                Some("https://error-center.aliyun.com/")
-            );
+        StsError::Validation(msg) => {
+            assert!(msg.contains("Invalid RoleArn format"));
         }
-        other => panic!("expected StsError::Api, got: {:?}", other),
+        other => panic!("expected StsError::Validation, got: {:?}", other),
     }
 
-    mock.assert_async().await;
+    // Note: The mock won't be called since validation fails before the request
+    // mock.assert_async().await;
 }
 
 #[tokio::test]
@@ -211,8 +182,8 @@ async fn assume_role_with_saml_success() {
 
     let resp = client
         .assume_role_with_saml(AssumeRoleWithSamlRequest {
-            saml_provider_arn: "acs:ram::123456:saml-provider/test-idp".into(),
-            role_arn: "acs:ram::123456:role/saml-role".into(),
+            saml_provider_arn: "acs:ram::123456789012:saml-provider/test-idp".into(),
+            role_arn: "acs:ram::123456789012:role/saml-role".into(),
             saml_assertion: "base64-encoded-saml-assertion".into(),
             policy: None,
             duration_seconds: None,
@@ -272,8 +243,8 @@ async fn assume_role_with_oidc_success() {
 
     let resp = client
         .assume_role_with_oidc(AssumeRoleWithOidcRequest {
-            oidc_provider_arn: "acs:ram::123456:oidc-provider/test-oidc".into(),
-            role_arn: "acs:ram::123456:role/oidc-role".into(),
+            oidc_provider_arn: "acs:ram::123456789012:oidc-provider/test-oidc".into(),
+            role_arn: "acs:ram::123456789012:role/oidc-role".into(),
             oidc_token: "eyJhbGciOiJSUzI1NiJ9.test-token".into(),
             policy: None,
             duration_seconds: None,
@@ -292,4 +263,79 @@ async fn assume_role_with_oidc_success() {
     assert_eq!(resp.oidc_token_info.client_ids, "client-id-001");
 
     mock.assert_async().await;
+}
+
+#[test]
+fn assume_role_builder_pattern() {
+    let request = AssumeRoleRequest::builder()
+        .role_arn("acs:ram::123456789012:role/test-role")
+        .role_session_name("test-session")
+        .duration_seconds(3600)
+        .external_id("external-123")
+        .build();
+
+    assert_eq!(request.role_arn, "acs:ram::123456789012:role/test-role");
+    assert_eq!(request.role_session_name, "test-session");
+    assert_eq!(request.duration_seconds, Some(3600));
+    assert_eq!(request.external_id, Some("external-123".to_string()));
+    assert!(request.policy.is_none());
+}
+
+#[tokio::test]
+async fn concurrent_requests_with_semaphore() {
+    use std::sync::Arc;
+    use tokio::task::JoinSet;
+
+    let mut server = Server::new_async().await;
+
+    // Create 5 mock responses
+    for i in 0..5 {
+        server
+            .mock("POST", "/")
+            .match_header("Content-Type", "application/x-www-form-urlencoded")
+            .match_body(Matcher::UrlEncoded(
+                "Action".into(),
+                "GetCallerIdentity".into(),
+            ))
+            .with_status(200)
+            .with_header("Content-Type", "application/json")
+            .with_body(format!(
+                r#"{{
+                    "RequestId": "req-{}",
+                    "AccountId": "123456789",
+                    "Arn": "acs:ram::123456789:user/testuser",
+                    "PrincipalId": "principal-{}",
+                    "IdentityType": "RAMUser",
+                    "UserId": "user-{}"
+                }}"#,
+                i, i, i
+            ))
+            .create_async()
+            .await;
+    }
+
+    // Create client with max 2 concurrent requests
+    let config = ClientConfig::default()
+        .with_endpoint(server.url())
+        .with_max_concurrent_requests(2);
+    let client =
+        Arc::new(Client::with_config(test_credential(), config).expect("failed to build client"));
+
+    let mut tasks = JoinSet::new();
+
+    // Spawn 5 concurrent requests
+    for _ in 0..5 {
+        let client = Arc::clone(&client);
+        tasks.spawn(async move { client.get_caller_identity().await });
+    }
+
+    // All tasks should complete successfully
+    let mut success_count = 0;
+    while let Some(result) = tasks.join_next().await {
+        if result.unwrap().is_ok() {
+            success_count += 1;
+        }
+    }
+
+    assert_eq!(success_count, 5);
 }

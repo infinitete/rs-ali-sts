@@ -13,7 +13,7 @@ fn test_credential() -> Credential {
 
 fn test_client(endpoint: String) -> Client {
     let config = ClientConfig::default().with_endpoint(endpoint);
-    Client::with_config(test_credential(), config)
+    Client::with_config(test_credential(), config).expect("failed to build client")
 }
 
 #[test]
@@ -47,7 +47,7 @@ fn blocking_assume_role_success() {
 
     let resp = client
         .assume_role(AssumeRoleRequest {
-            role_arn: "acs:ram::123456:role/test-role".into(),
+            role_arn: "acs:ram::123456789012:role/test-role".into(),
             role_session_name: "session-name".into(),
             policy: None,
             duration_seconds: Some(3600),
@@ -96,7 +96,7 @@ fn blocking_assume_role_api_error() {
 
     let err = client
         .assume_role(AssumeRoleRequest {
-            role_arn: "invalid-role-arn".into(),
+            role_arn: "acs:ram::123456789012:role/nonexistent-role".into(),
             role_session_name: "session-name".into(),
             policy: None,
             duration_seconds: None,

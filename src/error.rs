@@ -1,5 +1,8 @@
 use thiserror::Error;
 
+/// Maximum characters to include in error message body for debugging.
+pub(crate) const MAX_ERROR_BODY_CHARS: usize = 200;
+
 /// Errors that can occur when using the STS SDK.
 #[derive(Debug, Error)]
 pub enum StsError {
@@ -35,6 +38,63 @@ pub enum StsError {
     /// Config file parse error.
     #[error("config error: {0}")]
     Config(String),
+
+    /// Validation error for request parameters.
+    #[error("validation error: {0}")]
+    Validation(String),
+}
+
+impl StsError {
+    /// Returns `true` if the error is potentially recoverable by retrying.
+    ///
+    /// Retryable errors include:
+    /// - Network/HTTP errors (timeouts, connection issues)
+    /// - Server errors (5xx)
+    ///
+    /// Non-retryable errors include:
+    /// - Authentication/credential errors
+    /// - Validation errors
+    /// - Client errors (4xx except 429)
+    pub fn is_retryable(&self) -> bool {
+        match self {
+            // Network errors are generally retryable
+            StsError::HttpClient(e) => e.is_timeout() || e.is_connect(),
+            StsError::Http(_) => true,
+
+            // API errors: check the code
+            StsError::Api { code, .. } => {
+                // Rate limiting is retryable
+                if code == "Throttling" || code == "ServiceUnavailable" {
+                    return true;
+                }
+                // Server errors (5xx-like) are retryable
+                code.starts_with("Internal") || code.starts_with("Service")
+            }
+
+            // These are never retryable
+            StsError::Signature(_)
+            | StsError::Credential(_)
+            | StsError::Deserialize(_)
+            | StsError::Config(_)
+            | StsError::Validation(_) => false,
+        }
+    }
+
+    /// Returns the request ID if this is an API error.
+    pub fn request_id(&self) -> Option<&str> {
+        match self {
+            StsError::Api { request_id, .. } => Some(request_id),
+            _ => None,
+        }
+    }
+
+    /// Returns the error code if this is an API error.
+    pub fn error_code(&self) -> Option<&str> {
+        match self {
+            StsError::Api { code, .. } => Some(code),
+            _ => None,
+        }
+    }
 }
 
 /// A specialized Result type for STS operations.

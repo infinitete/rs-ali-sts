@@ -13,6 +13,54 @@ pub struct Credentials {
     pub expiration: String,
 }
 
+impl Credentials {
+    /// Returns the access key ID.
+    pub fn access_key_id(&self) -> &str {
+        &self.access_key_id
+    }
+
+    /// Returns the access key secret.
+    pub fn access_key_secret(&self) -> &str {
+        &self.access_key_secret
+    }
+
+    /// Returns the security token.
+    pub fn security_token(&self) -> &str {
+        &self.security_token
+    }
+
+    /// Returns the expiration timestamp string.
+    pub fn expiration(&self) -> &str {
+        &self.expiration
+    }
+
+    /// Checks if the credentials have expired.
+    ///
+    /// Returns `true` if the current time is past the expiration time.
+    pub fn is_expired(&self) -> bool {
+        if let Ok(exp_time) = chrono::DateTime::parse_from_rfc3339(&self.expiration) {
+            let now = chrono::Utc::now();
+            return now >= exp_time.with_timezone(&chrono::Utc);
+        }
+        // If we can't parse the expiration, assume expired for safety
+        true
+    }
+
+    /// Returns the remaining time until expiration, if parseable.
+    ///
+    /// Returns `None` if the expiration time cannot be parsed or credentials are already expired.
+    pub fn time_to_expiry(&self) -> Option<std::time::Duration> {
+        if let Ok(exp_time) = chrono::DateTime::parse_from_rfc3339(&self.expiration) {
+            let now = chrono::Utc::now();
+            let diff = exp_time.with_timezone(&chrono::Utc) - now;
+            if diff.num_seconds() > 0 {
+                return Some(std::time::Duration::from_secs(diff.num_seconds() as u64));
+            }
+        }
+        None
+    }
+}
+
 impl std::fmt::Debug for Credentials {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Credentials")

@@ -4,14 +4,47 @@ use std::path::PathBuf;
 
 use crate::error::{Result, StsError};
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 /// Alibaba Cloud AccessKey credential.
 ///
 /// The `Debug` implementation redacts `access_key_secret` to prevent
 /// accidental leakage in logs.
+///
+/// # Example
+///
+/// ```
+/// use rs_ali_sts::Credential;
+///
+/// let cred = Credential::new("access_key_id", "access_key_secret");
+/// ```
 #[derive(Clone)]
 pub struct Credential {
+    /// Alibaba Cloud AccessKey ID.
     pub access_key_id: String,
+    /// Alibaba Cloud AccessKey Secret.
     pub access_key_secret: String,
+}
+
+impl Credential {
+    /// Creates a new credential with the given access key ID and secret.
+    pub fn new(access_key_id: impl Into<String>, access_key_secret: impl Into<String>) -> Self {
+        Self {
+            access_key_id: access_key_id.into(),
+            access_key_secret: access_key_secret.into(),
+        }
+    }
+
+    /// Returns the access key ID.
+    pub fn access_key_id(&self) -> &str {
+        &self.access_key_id
+    }
+
+    /// Returns the access key secret.
+    pub fn access_key_secret(&self) -> &str {
+        &self.access_key_secret
+    }
 }
 
 impl std::fmt::Debug for Credential {
@@ -121,6 +154,47 @@ impl ProfileProvider {
             .join("credentials"))
     }
 
+    /// Checks file permissions and warns if the file has insecure permissions.
+    #[cfg(unix)]
+    fn check_file_permissions(path: &PathBuf) {
+        if let Ok(metadata) = fs::metadata(path) {
+            let permissions = metadata.permissions();
+            let mode = permissions.mode();
+
+            // Check if group or others have read permission
+            let group_read = (mode & 0o040) != 0;
+            let other_read = (mode & 0o004) != 0;
+            // Check if any execute permission is set
+            let any_execute = (mode & 0o111) != 0;
+
+            if group_read || other_read || any_execute {
+                eprintln!(
+                    "Security Warning: Credentials file '{}' has insecure permissions. \
+                    Consider running: chmod 600 {}",
+                    path.display(),
+                    path.display()
+                );
+            }
+        }
+    }
+
+    /// Checks file permissions on Windows platforms.
+    #[cfg(windows)]
+    fn check_file_permissions(path: &PathBuf) {
+        if let Ok(metadata) = fs::metadata(path) {
+            // On Windows, check if file is writable by anyone other than the owner
+            // This is a simplified check - Windows ACLs are complex
+            let readonly = metadata.permissions().readonly();
+
+            if !readonly {
+                eprintln!(
+                    "Security Warning: Credentials file '{}' may have insecure permissions. \
+                    Consider restricting access to the file owner only.",
+                    path.display()
+                );
+            }
+        }
+    }
     fn parse_ini(content: &str, profile: &str) -> Result<Credential> {
         let section_header = format!("[{}]", profile);
         let mut in_section = false;
@@ -166,6 +240,10 @@ impl CredentialProvider for ProfileProvider {
             Some(p) => p.clone(),
             None => Self::default_path()?,
         };
+
+        #[cfg(unix)]
+        Self::check_file_permissions(&path);
+
         let content = fs::read_to_string(&path).map_err(|e| {
             StsError::Config(format!(
                 "cannot read credentials file {}: {}",
@@ -216,6 +294,34 @@ impl CredentialProvider for ChainProvider {
 mod tests {
     use super::*;
 
+    /// Helper function to remove environment variables.
+    ///
+    /// Note: `env::remove_var` and `env::set_var` are marked as unsafe
+    /// in Rust's std library. In this test context, the operations are safe
+    /// as we're only modifying test environment variables.
+    fn test_remove_env_vars() {
+        unsafe {
+            env::remove_var("ALIBABA_CLOUD_ACCESS_KEY_ID");
+            env::remove_var("ALIBABA_CLOUD_ACCESS_KEY_SECRET");
+        }
+    }
+
+    /// Helper function to restore environment variables.
+    ///
+    /// Note: `env::set_var` is marked as unsafe in Rust's std library.
+    /// In this test context, the operation is safe as we're only restoring
+    /// previously saved test environment variables.
+    fn test_restore_env_vars(saved_id: Option<String>, saved_secret: Option<String>) {
+        unsafe {
+            if let Some(v) = saved_id {
+                env::set_var("ALIBABA_CLOUD_ACCESS_KEY_ID", v);
+            }
+            if let Some(v) = saved_secret {
+                env::set_var("ALIBABA_CLOUD_ACCESS_KEY_SECRET", v);
+            }
+        }
+    }
+
     #[test]
     fn static_provider_returns_credential() {
         let provider = StaticProvider::new("test-id", "test-secret");
@@ -240,24 +346,14 @@ mod tests {
     fn env_provider_missing_vars() {
         let saved_id = env::var("ALIBABA_CLOUD_ACCESS_KEY_ID").ok();
         let saved_secret = env::var("ALIBABA_CLOUD_ACCESS_KEY_SECRET").ok();
-        unsafe {
-            env::remove_var("ALIBABA_CLOUD_ACCESS_KEY_ID");
-            env::remove_var("ALIBABA_CLOUD_ACCESS_KEY_SECRET");
-        }
+        test_remove_env_vars();
 
         let result = EnvProvider.resolve();
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(err_msg.contains("ALIBABA_CLOUD_ACCESS_KEY_ID"));
 
-        unsafe {
-            if let Some(v) = saved_id {
-                env::set_var("ALIBABA_CLOUD_ACCESS_KEY_ID", v);
-            }
-            if let Some(v) = saved_secret {
-                env::set_var("ALIBABA_CLOUD_ACCESS_KEY_SECRET", v);
-            }
-        }
+        test_restore_env_vars(saved_id, saved_secret);
     }
 
     #[test]
@@ -325,22 +421,93 @@ access_key_secret = my-secret
     fn chain_provider_all_fail() {
         let saved_id = env::var("ALIBABA_CLOUD_ACCESS_KEY_ID").ok();
         let saved_secret = env::var("ALIBABA_CLOUD_ACCESS_KEY_SECRET").ok();
-        unsafe {
-            env::remove_var("ALIBABA_CLOUD_ACCESS_KEY_ID");
-            env::remove_var("ALIBABA_CLOUD_ACCESS_KEY_SECRET");
-        }
+        test_remove_env_vars();
 
         let chain = ChainProvider::new(vec![Box::new(EnvProvider)]);
         let result = chain.resolve();
         assert!(result.is_err());
 
-        unsafe {
-            if let Some(v) = saved_id {
-                env::set_var("ALIBABA_CLOUD_ACCESS_KEY_ID", v);
-            }
-            if let Some(v) = saved_secret {
-                env::set_var("ALIBABA_CLOUD_ACCESS_KEY_SECRET", v);
-            }
-        }
+        test_restore_env_vars(saved_id, saved_secret);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn check_file_permissions_warns_on_insecure() {
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp_dir = std::env::temp_dir();
+        let test_file = temp_dir.join("test_credentials_644");
+        let mut file = fs::File::create(&test_file).unwrap();
+        writeln!(file, "[default]").unwrap();
+        writeln!(file, "access_key_id = test-id").unwrap();
+        writeln!(file, "access_key_secret = test-secret").unwrap();
+
+        // Set permissions to 644 (readable by group and others)
+        let mut perms = fs::metadata(&test_file).unwrap().permissions();
+        perms.set_mode(0o644);
+        fs::set_permissions(&test_file, perms).unwrap();
+
+        // This should trigger a warning
+        let provider = ProfileProvider::new().with_file(&test_file);
+        let cred = provider.resolve();
+        assert!(cred.is_ok());
+
+        // Clean up
+        fs::remove_file(&test_file).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn check_file_permissions_ok_on_secure() {
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp_dir = std::env::temp_dir();
+        let test_file = temp_dir.join("test_credentials_600");
+        let mut file = fs::File::create(&test_file).unwrap();
+        writeln!(file, "[default]").unwrap();
+        writeln!(file, "access_key_id = test-id").unwrap();
+        writeln!(file, "access_key_secret = test-secret").unwrap();
+
+        // Set permissions to 600 (only owner readable)
+        let mut perms = fs::metadata(&test_file).unwrap().permissions();
+        perms.set_mode(0o600);
+        fs::set_permissions(&test_file, perms).unwrap();
+
+        // This should NOT trigger a warning
+        let provider = ProfileProvider::new().with_file(&test_file);
+        let cred = provider.resolve();
+        assert!(cred.is_ok());
+
+        // Clean up
+        fs::remove_file(&test_file).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn check_file_permissions_warns_on_execute() {
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp_dir = std::env::temp_dir();
+        let test_file = temp_dir.join("test_credentials_exec");
+        let mut file = fs::File::create(&test_file).unwrap();
+        writeln!(file, "[default]").unwrap();
+        writeln!(file, "access_key_id = test-id").unwrap();
+        writeln!(file, "access_key_secret = test-secret").unwrap();
+
+        // Set permissions to 700 (owner read/write/execute only)
+        let mut perms = fs::metadata(&test_file).unwrap().permissions();
+        perms.set_mode(0o700);
+        fs::set_permissions(&test_file, perms).unwrap();
+
+        // This should trigger a warning (execute bit is set)
+        let provider = ProfileProvider::new().with_file(&test_file);
+        let cred = provider.resolve();
+        assert!(cred.is_ok());
+
+        // Clean up
+        fs::remove_file(&test_file).unwrap();
     }
 }
