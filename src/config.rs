@@ -235,7 +235,7 @@ mod tests {
         );
         assert_eq!(config.format, "JSON");
         assert_eq!(config.api_version, "2015-04-01");
-        assert_eq!(config.signature_version, SignatureVersion::V2_0);
+        assert_eq!(config.signature_version, SignatureVersion::V1_0);
     }
 
     #[test]
@@ -295,7 +295,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "legacy-signature")]
     fn custom_signature_version_v1() {
         let config = ClientConfig::default().with_signature_version(SignatureVersion::V1_0);
         assert_eq!(config.signature_version, SignatureVersion::V1_0);

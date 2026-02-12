@@ -35,7 +35,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-rs-ali-sts = "0.1.1"
+rs-ali-sts = "0.1.2"
 
 # For async usage, add a tokio runtime:
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
@@ -46,13 +46,6 @@ To use the synchronous (blocking) client:
 ```toml
 [dependencies]
 rs-ali-sts = { version = "0.1", features = ["blocking"] }
-```
-
-For legacy SHA-1 signature support (not recommended):
-
-```toml
-[dependencies]
-rs-ali-sts = { version = "0.1", features = ["legacy-signature"] }
 ```
 
 ## Quick Start
@@ -262,7 +255,7 @@ match client.assume_role(request).await {
 | **HTTPS POST** | Credentials never appear in URLs |
 | **rustls TLS** | Pure Rust TLS, no OpenSSL dependency |
 | **UUID v4 Nonce** | Prevents replay attacks |
-| **HMAC-SHA256** | Secure signature algorithm (default) |
+| **HMAC-SHA1** | Signature algorithm (compatible with Alibaba Cloud STS) |
 | **File Permission Check** | Warns on insecure credential file permissions (Unix) |
 
 ## License

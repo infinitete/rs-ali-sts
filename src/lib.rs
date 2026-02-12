@@ -99,7 +99,7 @@
 //!
 //! - **Credential redaction**: `access_key_secret` and `security_token` are shown as `****` in debug output
 //! - **HTTPS POST**: Credentials never appear in URLs
-//! - **HMAC-SHA256**: Secure signature algorithm by default
+//! - **HMAC-SHA1**: Signature algorithm compatible with Alibaba Cloud STS
 //! - **UUID v4 nonce**: Prevents replay attacks
 //!
 //! # Feature Flags
@@ -107,7 +107,6 @@
 //! | Feature | Description |
 //! |---------|-------------|
 //! | `blocking` | Enables synchronous (`blocking::Client`) |
-//! | `legacy-signature` | Enables SHA-1 signature (not recommended) |
 //!
 pub mod client;
 pub mod config;

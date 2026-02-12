@@ -5,28 +5,24 @@ use std::collections::BTreeMap;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use hmac::{Hmac, Mac};
-use sha2::Sha256;
-
-#[cfg(feature = "legacy-signature")]
 use sha1::Sha1;
+use sha2::Sha256;
 
 use crate::error::{Result, StsError};
 
-#[cfg(feature = "legacy-signature")]
 type HmacSha1 = Hmac<Sha1>;
 type HmacSha256 = Hmac<Sha256>;
 
 /// Signature version enum for Alibaba Cloud STS API.
 ///
-/// - V1_0: HMAC-SHA1 signature (legacy, less secure, requires `legacy-signature` feature)
-/// - V2_0: HMAC-SHA256 signature (recommended, more secure)
+/// - V1_0: HMAC-SHA1 signature (version 1.0) - default, compatible with Alibaba Cloud STS
+/// - V2_0: HMAC-SHA256 signature (version 2.0) - more secure but may not be supported
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SignatureVersion {
-    /// HMAC-SHA1 signature (version 1.0) - requires `legacy-signature` feature
-    #[cfg(feature = "legacy-signature")]
-    V1_0 = 1,
-    /// HMAC-SHA256 signature (version 2.0)
+    /// HMAC-SHA1 signature (version 1.0) - compatible with Alibaba Cloud STS API
     #[default]
+    V1_0 = 1,
+    /// HMAC-SHA256 signature (version 2.0) - more secure but may not be supported by all regions
     V2_0 = 2,
 }
 
@@ -34,7 +30,6 @@ impl SignatureVersion {
     /// Returns the signature method string for the API request.
     pub fn as_method_str(&self) -> &'static str {
         match self {
-            #[cfg(feature = "legacy-signature")]
             SignatureVersion::V1_0 => "HMAC-SHA1",
             SignatureVersion::V2_0 => "HMAC-SHA256",
         }
@@ -43,7 +38,6 @@ impl SignatureVersion {
     /// Returns the version string for the API request.
     pub fn as_version_str(&self) -> &'static str {
         match self {
-            #[cfg(feature = "legacy-signature")]
             SignatureVersion::V1_0 => "1.0",
             SignatureVersion::V2_0 => "2.0",
         }
@@ -131,7 +125,6 @@ pub(crate) fn sign_request(
     let signing_key = format!("{}&", access_key_secret);
 
     let signature = match version {
-        #[cfg(feature = "legacy-signature")]
         SignatureVersion::V1_0 => {
             let mut mac = HmacSha1::new_from_slice(signing_key.as_bytes())
                 .map_err(|e| StsError::Signature(format!("HMAC-SHA1 key error: {}", e)))?;
@@ -314,12 +307,37 @@ mod tests {
 
     #[test]
     fn signature_version_default() {
-        assert_eq!(SignatureVersion::default(), SignatureVersion::V2_0);
+        assert_eq!(SignatureVersion::default(), SignatureVersion::V1_0);
     }
 
     #[test]
     fn signature_version_strings() {
+        assert_eq!(SignatureVersion::V1_0.as_method_str(), "HMAC-SHA1");
+        assert_eq!(SignatureVersion::V1_0.as_version_str(), "1.0");
         assert_eq!(SignatureVersion::V2_0.as_method_str(), "HMAC-SHA256");
         assert_eq!(SignatureVersion::V2_0.as_version_str(), "2.0");
+    }
+
+    #[test]
+    fn sign_request_sha1_deterministic() {
+        let mut params = BTreeMap::new();
+        params.insert("Action".to_string(), "AssumeRole".to_string());
+        params.insert("Format".to_string(), "JSON".to_string());
+        params.insert("Version".to_string(), "2015-04-01".to_string());
+        params.insert("AccessKeyId".to_string(), "testid".to_string());
+        params.insert("SignatureMethod".to_string(), "HMAC-SHA1".to_string());
+        params.insert("SignatureVersion".to_string(), "1.0".to_string());
+        params.insert("SignatureNonce".to_string(), "fixed-nonce".to_string());
+        params.insert("Timestamp".to_string(), "2024-01-01T00:00:00Z".to_string());
+        params.insert(
+            "RoleArn".to_string(),
+            "acs:ram::123456:role/test".to_string(),
+        );
+        params.insert("RoleSessionName".to_string(), "session".to_string());
+
+        let sig1 = sign_request(&params, "testsecret", "POST", SignatureVersion::V1_0).unwrap();
+        let sig2 = sign_request(&params, "testsecret", "POST", SignatureVersion::V1_0).unwrap();
+        assert_eq!(sig1, sig2, "SHA-1 signature must be deterministic");
+        assert!(!sig1.is_empty());
     }
 }
