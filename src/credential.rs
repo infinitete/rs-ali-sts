@@ -241,7 +241,7 @@ impl CredentialProvider for ProfileProvider {
             None => Self::default_path()?,
         };
 
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         Self::check_file_permissions(&path);
 
         let content = fs::read_to_string(&path).map_err(|e| {
